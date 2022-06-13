@@ -192,7 +192,23 @@ go registers memory = do (memory', instr) <- mem_read (registers!(cast RPC)) mem
                          registers' <- make_registers_mutable registers
                          rpc <- readArray registers' (cast RPC) 
                          writeArray registers' (cast RPC) (rpc+1) 
-                         putStrLn (show $ getOp instr)
+                         case getOp instr of
+                            ADD  -> 
+                            LD   ->
+                            STR  ->
+                            JSR  ->
+                            AND  ->
+                            LDR  ->
+                            STRR ->
+                            RTI  ->
+                            NOT  ->
+                            LDI  ->
+                            STI  ->
+                            JMP  ->
+                            RES  ->
+                            LEA  ->
+                            TRAP ->
+
 
 read_image_file :: String -> IO (Memory) 
 read_image_file file = do (origin:bytes) <- process . B.unpack <$> B.readFile file
