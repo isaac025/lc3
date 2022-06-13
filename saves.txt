@@ -1,0 +1,10 @@
+trap mem instr = case (instr .&. 0xFF) of
+    trap_getc  -> undefined
+    trap_out   -> undefined
+    trap_puts  -> undefined -- 1. newArray with mem & extra space
+                            -- 2. loop until reached last value & execute putc
+                            -- 3. flush to stdout
+    trap_in    -> undefined
+    trap_putsp -> undefined
+    trap_halt  -> undefined
+

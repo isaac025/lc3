@@ -1,21 +1,18 @@
+{-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE BlockArguments #-}
+{-# LANGUAGE AllowAmbiguousTypes#-}
+
 module Main where
 
-import System.Environment (getArgs)
-import Data.Word
+import Data.Word (Word16, )
+import Data.Bits (shiftR, shiftL, (.|.), (.&.), Bits(..))
+import Data.List (foldl')
+import Control.Monad
 import Data.Array
-import Data.Bits (shiftR, shiftL, Bits(..), (.&.))
-import Control.Monad (forever)
-import System.IO (hSetBuffering, stdin, BufferMode(NoBuffering))
+import Data.Array.IO
+import System.IO (hSetBuffering, BufferMode(..), hFlush, stdin, stdout)
+import System.Environment (getArgs)
 
-{- Steps:
- -  Load one instruction from memory at the address of the PC register.
- -  Increment the PC register.
- -  Look at the opcode to determine which type of instruction it should perform.
- -  Perform the instruction using the parameters in the instruction.
- -  Go back to step 1.
--}
-
--- Register Stack
 data R = R0
        | R1
        | R2
@@ -29,81 +26,118 @@ data R = R0
        | RCOUNT
        deriving (Show, Eq, Bounded, Enum)
 
-type Register = Array Word16 Word16
-type PC = Word16
+cast :: R -> Word16
+cast = (fromIntegral . fromEnum)
 
-data Registers = Registers { reg :: Register
-                           , pc :: PC
-                           }
+data Status = Running
+            | Halted
+            deriving (Show, Eq)
 
-initialize :: Registers
-initialize = Registers { reg = array (0,memory_size-1) [(i,0) | i <- [0..memory_size-1]]
-                       , pc = 0x300
+type Registers = Array Word16 Word16
+
+type Memory = Array Word16 Word16
+
+data Machine = Machine { reg :: Registers
+                       , mem :: Memory
+                       , status :: Status
                        }
--- Register Stack end
 
--- Memory
-type Address = Word16
-type Val = Word16
+build_registers :: Registers
+build_registers = array (0,10) [(i,0) | i <- [0..10]]
 
-memory_max :: Word16
-memory_max = 16
+initialize_memory :: Memory
+initialize_memory = array (0,memory_size-1) [(i,0) | i <- [0..(memory_size-1)]]
 
 memory_size :: (Bits a, Num a) => a
 memory_size = 1 `shiftL` 16
 
-data Memroy = Memory { memory :: Array Address Val }
--- Memory End
+mem_read r = undefined
+
+--create_machine :: Machine
+create_machine = Machine { reg = build_registers 
+                         , mem = initialize_memory
+                         , status = Running
+                         }
+
+setup_registers regs = do regs' <- thaw regs
+                          writeArray regs' (cast RCOND) fl_zro
+                          writeArray regs' (cast RPC) pc_start
+                          imm <- freeze regs'
+                          imm
+
+pc_start :: Word16
+pc_start = 0x3000
+
+trap_getc, trap_out, trap_puts, trap_in, trap_putsp, trap_halt :: Word16
+trap_getc  = 0x20 
+trap_out   = 0x21 
+trap_puts  = 0x22 
+trap_in    = 0x23 
+trap_putsp = 0x24 
+trap_halt  = 0x25 
+
+fl_zro, fl_pos, fl_neg :: (Bits a, Num a) => a
+fl_zro = 1 `shiftL` 1
+fl_pos = 1 `shiftL` 0
+fl_neg = 1 `shiftL` 2
 
 sign_extend :: Word16 -> Int -> Word16
 sign_extend bit bit_count
     | (bit `shiftR` (bit_count - 1) .&. 1) == 1 = bit .|. (0xFFFF `shiftL` bit_count)
     | otherwise = bit
 
-update_flags :: Word16 -> Registers -> Word16
-update_flags r registers
-    | (rg!r) == 0               = rg!(r_cond)
-    | ((rg!r) `shiftR` 15 == 1) = rg!(r_cond)
-    | otherwise                 = rg!(r_cond)
-        where rg = reg registers
-              r_cond = cast RCOND
 
-add :: Word16 -> Word16
-add instr = case imm_flag == 1 of
-    True ->  undefined
-    False -> undefined
+update_flags :: MArray a Word16 m => a Word16 Word16 -> Word16 -> m ()
+update_flags arr r = do rg <- readArray arr r 
+                        case rg of
+                            z | z == 0              -> writeArray arr r' fl_zro
+                              | z `shiftR` 15 == 1  -> writeArray arr r' fl_neg
+                              | otherwise           -> writeArray arr r' fl_pos
+                            where r' = cast RCOND 
+
+swap16 :: Word16 -> Word16
+swap16 x = (x `shiftL` 8) .|. (x `shiftR` 8) 
+
+merge l r = foldl' go 0x0 (zip [15,14..0] bits)
+  where
+    go acc (n,True) = setBit acc n
+    go acc (n,False) = acc
+    bits =
+      map (testBit l) [7,6..0] ++
+      map (testBit r) [7,6..0]
+
+process bytes = map go (chunks 2 bytes)
+    where go [_] = error "odd number"
+          go [x,y] = merge x y
+
+chunks _ [] = []
+chunks n xs = let (l,r) = splitAt n xs
+              in l : chunks n r
+
+add :: MArray a Word16 m => a Word16 Word16 -> Word16 -> m ()
+add arr instr = case (imm_flag == 1) of
+    True -> do let imm5 = sign_extend (instr .&. 0x1F) 5
+               rg1 <- readArray arr r1
+               writeArray arr r0 (rg1+imm5)
+               update_flags arr r0
+
+    False -> do let r2 = instr .&. 0x4
+                rg1 <- readArray arr r1
+                rg2 <- readArray arr r2
+                writeArray arr r0 (rg1+rg2)
+                update_flags arr r0
+
     where r0 = (instr `shiftR` 9) .&. 0x7
           r1 = (instr `shiftR` 6) .&. 0x7
           imm_flag = (instr `shiftR` 5) .&. 0x1
 
-cast :: R -> Word16
-cast val = (fromIntegral . fromEnum) val :: Word16
+ldi arr instr = do let r0 = (instr `shiftR` 9) .&. 0x7
+                   let pc_offset = sign_extend (instr .&. 0x1FF) 9
+                   mutable <- thaw arr
+                   update_flags mutable r0
 
-data OpCodes = BR   -- branch
-             | ADD  -- add
-             | LD   -- load
-             | STR  -- store
-             | JSR  -- jump register
-             | AND  -- bitwise and
-             | LDR  -- load register
-             | STRR -- store register
-             | RTI  -- unused
-             | NOT  -- bitwise not
-             | LDI  -- load indirect
-             | STI  -- store indirect
-             | JMP  -- jump
-             | RES  -- reserved (unused)
-             | LEA  -- load effective address
-             | TRAP -- execute trap
-             deriving (Show, Eq, Bounded, Enum)
-
-run :: [FilePath] -> IO ()
-run = mapM_ (\f -> putStrLn ("you are number: " ++ (show f))) 
+read_image_file args = undefined        
 
 main :: IO ()
-main = do hSetBuffering stdin NoBuffering
-          args <- getArgs
-          case (length args) < 2 of
-            True -> putStrLn "lc3 [image-file]..."
-            False -> forever $ run args 
-
+main = do hSetBuffering stdin NoBuffering 
+          putStrLn "Hello!"
