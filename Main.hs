@@ -27,8 +27,32 @@ data R = R0
        | RCOUNT
        deriving (Show, Eq, Bounded, Enum)
 
+data OpCode = BR    -- branch
+            | ADD   -- add 
+            | LD    -- load
+            | STR   -- store
+            | JSR   -- jump register
+            | AND   -- bitwise and
+            | LDR   -- load register
+            | STRR  -- store register
+            | RTI   -- unused
+            | NOT   -- bitwise not
+            | LDI   -- load indirect
+            | STI   -- store indirect
+            | JMP   -- jump
+            | RES   -- reserved (unused)
+            | LEA   -- load effective address
+            | TRAP  -- execute trap 
+            deriving (Eq, Ord, Show, Bounded, Enum)
+
 cast :: R -> Word16
 cast = (fromIntegral . fromEnum)
+
+toE :: Enum e => Word16 -> e
+toE = (toEnum . fromIntegral)
+
+getOp :: Word16 -> OpCode 
+getOp x = toE (x `shiftR` 12)
 
 data Status = Running
             | Halted
@@ -92,7 +116,7 @@ pc_start :: Word16
 pc_start = 0x3000
 
 trap_getc, trap_out, trap_puts, trap_in, trap_putsp, trap_halt :: Word16
-trap_getc  = 0x20 
+trap_getc  = 0x20
 trap_out   = 0x21 
 trap_puts  = 0x22 
 trap_in    = 0x23 
@@ -164,19 +188,20 @@ ldi arr instr = do let r0 = (instr `shiftR` 9) .&. 0x7
                    update_flags mutable r0
 
 go :: Registers -> Memory -> IO ()
-go registers memory = do instr <- mem_read (registers!(cast RPC)) memory
-                         
+go registers memory = do (memory', instr) <- mem_read (registers!(cast RPC)) memory
+                         registers' <- make_registers_mutable registers
+                         rpc <- readArray registers' (cast RPC) 
+                         writeArray registers' (cast RPC) (rpc+1) 
+                         putStrLn (show $ getOp instr)
 
 read_image_file :: String -> IO (Memory) 
 read_image_file file = do (origin:bytes) <- process . B.unpack <$> B.readFile file
-                          let pad = zip [1..origin-1] $ replicate (fromIntegral origin - 1) (0x0 :: Word16)
-                              bytes_size = fromIntegral (length bytes)::Word16
-                              mid = zip [1..bytes_size] $ (origin:bytes)
-                              pad_size = length pad
-                              mid_size = length mid
-                              memory_size' = memory_size - (mid_size + pad_size)
-                              end = zip [1..fromIntegral memory_size' :: Word16] $ replicate memory_size' (0x0 :: Word16)
-                          pure $ array (1,fromIntegral memory_size' :: Word16) (pad ++ mid ++ end)
+                          let pad = replicate (fromIntegral origin - 1) (0x0 :: Word16)
+                              mid = (origin:bytes)
+                              new_size = memory_size - (length pad + length mid)
+                              end = replicate new_size (0x0 :: Word16)
+                              final = zip [0..memory_size-1] (pad ++ mid ++ end)
+                          pure $ array (0,memory_size-1) final
                         
 load_args :: [String] -> IO (Memory)
 load_args args = case (length args) < 1 of 
@@ -191,8 +216,8 @@ main = do hSetBuffering stdin NoBuffering   -- setup
           heap <- load_args args
           regs' <- setup_registers build_registers
           let exMachina = Machine regs' heap Running  
-          let loop = do unless ((status exMachina) == Halted)
-                         $ do (heap', instr) <- mem_read (regs'!(cast RPC)) heap
-                              let op = instr `shiftR` 12
-                              (go regs' heap') >> loop
+          forever $ do 
+              (heap', instr) <- mem_read (regs'!(cast RPC)) heap
+              let op = instr `shiftR` 12
+              (go regs' heap')
           putStrLn "Done!"
