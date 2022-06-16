@@ -183,142 +183,143 @@ chunks _ [] = []
 chunks n xs = let (l,r) = splitAt n xs
               in l : chunks n r
 
-go :: Registers -> Memory -> IO ()
-go registers memory = do (memory', instr) <- mem_read (registers!(cast RPC)) memory
-                         registers' <- make_registers_mutable registers
-                         rpc <- readArray registers' (cast RPC) 
-                         writeArray registers' (cast RPC) (rpc+1) 
-                         case getOp instr of
-                            BR   -> do let pc_offset = sign_extend (instr .&. 0x1FF) 9
-                                       let cond_flag = (instr `shiftR` 9) .&. 0x7
-                                       r_pc <- readArray registers' (cast RPC)
-                                       when ((cond_flag .&. r_pc) /= 0) $ do
-                                        writeArray registers' (cast RPC) (r_pc + pc_offset)
+go :: Registers -> Memory -> Status -> IO ()
+go _ _ Halted = putStrLn "Halt!"
+go registers memory _ = do (memory', instr) <- mem_read (registers!(cast RPC)) memory
+                           registers' <- make_registers_mutable registers
+                           rpc <- readArray registers' (cast RPC) 
+                           writeArray registers' (cast RPC) (rpc+1) 
+                           registers'' <- freeze registers'
+                           let op = getOp instr
+                           case op of
+                                BR   -> do let pc_offset = sign_extend (instr .&. 0x1FF) 9
+                                           let cond_flag = (instr `shiftR` 9) .&. 0x7
+                                           r_pc <- readArray registers' (cast RPC)
+                                           when ((cond_flag .&. r_pc) /= 0) $ do
+                                            writeArray registers' (cast RPC) (r_pc + pc_offset)
 
-                            ADD  -> do let imm_flag = (instr `shiftR` 5) .&. 0x1
-                                       let r0 = (instr `shiftR` 9) .&. 0x7
-                                       let r1 = (instr `shiftR` 6) .&. 0x7
-                                       let pc_offset = sign_extend (instr .&. 0x1FF) 9
-                                       let offset = sign_extend (instr .&. 0x3F) 6
-                                       case imm_flag /= 0 of
-                                        True -> do let imm5 = sign_extend (instr .&. 0x1F) 5
-                                                   rg0 <- readArray registers' r0
-                                                   rg1 <- readArray registers' r1
-                                                   writeArray registers' rg0 (rg1+imm5)
+                                ADD  -> do let imm_flag = (instr `shiftR` 5) .&. 0x1
+                                           let r0 = (instr `shiftR` 9) .&. 0x7
+                                           let r1 = (instr `shiftR` 6) .&. 0x7
+                                           let pc_offset = sign_extend (instr .&. 0x1FF) 9
+                                           let offset = sign_extend (instr .&. 0x3F) 6
+                                           case imm_flag /= 0 of
+                                            True -> do let imm5 = sign_extend (instr .&. 0x1F) 5
+                                                       rg0 <- readArray registers' r0
+                                                       rg1 <- readArray registers' r1
+                                                       writeArray registers' rg0 (rg1+imm5)
 
-                                        False -> do let r2 = instr .&. 0x7
-                                                    rg0 <- readArray registers' r0
-                                                    rg1 <- readArray registers' r1
-                                                    writeArray registers' r0 (rg1+r2)
+                                            False -> do let r2 = instr .&. 0x7
+                                                        rg0 <- readArray registers' r0
+                                                        rg1 <- readArray registers' r1
+                                                        writeArray registers' r0 (rg1+r2)
 
-                                       putStrLn "have to fix update_flags"
-                                                        
-                            LD   -> do let r0 = (instr `shiftR` 9) .&. 0x7
-                                       let pc_offset = sign_extend (instr .&. 0x1FF) 9
-                                       --mem_read
-                                       --update_flags
-                                       pure ()
+                                           putStrLn "have to fix update_flags"
+                                                            
+                                LD   -> do let r0 = (instr `shiftR` 9) .&. 0x7
+                                           let pc_offset = sign_extend (instr .&. 0x1FF) 9
+                                           --mem_read
+                                           --update_flags
+                                           pure ()
 
-                            STR  -> do let r0 = (instr `shiftR` 9) .&. 0x7
-                                       let pc_offset = sign_extend (instr .&. 0x1FF) 9
-                                       -- mem_write
-                                       pure ()
+                                STR  -> do let r0 = (instr `shiftR` 9) .&. 0x7
+                                           let pc_offset = sign_extend (instr .&. 0x1FF) 9
+                                           -- mem_write
+                                           pure ()
 
-                            JSR  -> do let long_flag = (instr `shiftR` 11) .&. 1
-                                       r_pc <- readArray registers' (cast RPC)
-                                       writeArray registers' (cast R7) r_pc
-                                       case long_flag /= 0 of
-                                        True  -> do let long_pc_offset = sign_extend (instr .&. 0x7FF) 11
-                                                    writeArray registers' (cast RPC) (r_pc+long_pc_offset)
+                                JSR  -> do let long_flag = (instr `shiftR` 11) .&. 1
+                                           r_pc <- readArray registers' (cast RPC)
+                                           writeArray registers' (cast R7) r_pc
+                                           case long_flag /= 0 of
+                                            True  -> do let long_pc_offset = sign_extend (instr .&. 0x7FF) 11
+                                                        writeArray registers' (cast RPC) (r_pc+long_pc_offset)
 
-                                        False -> do let r1 = (instr `shiftR` 6) .&. 0x7
-                                                    r1' <- readArray registers' r1
-                                                    writeArray registers' (cast RPC) r1' 
+                                            False -> do let r1 = (instr `shiftR` 6) .&. 0x7
+                                                        r1' <- readArray registers' r1
+                                                        writeArray registers' (cast RPC) r1' 
 
-                            AND  -> do let imm_flag = (instr `shiftR` 5) .&. 0x1
-                                       let r0 = (instr `shiftR` 9) .&. 0x7
-                                       let r1 = (instr `shiftR` 6) .&. 0x7
-                                       case (imm_flag /= 0) of
-                                        True -> do let imm5 = sign_extend (instr .&. 0x1F) 5
-                                                   rg1 <- readArray registers' r1
-                                                   writeArray registers' r0 (rg1 .&. imm5)
+                                AND  -> do let imm_flag = (instr `shiftR` 5) .&. 0x1
+                                           let r0 = (instr `shiftR` 9) .&. 0x7
+                                           let r1 = (instr `shiftR` 6) .&. 0x7
+                                           case (imm_flag /= 0) of
+                                            True -> do let imm5 = sign_extend (instr .&. 0x1F) 5
+                                                       rg1 <- readArray registers' r1
+                                                       writeArray registers' r0 (rg1 .&. imm5)
 
-                                        False -> do let r2 = instr .&. 0x7
-                                                    rg1 <- readArray registers' r1
-                                                    rg2 <- readArray registers' r2
-                                                    writeArray registers' r0 (rg1 .&. rg2)
+                                            False -> do let r2 = instr .&. 0x7
+                                                        rg1 <- readArray registers' r1
+                                                        rg2 <- readArray registers' r2
+                                                        writeArray registers' r0 (rg1 .&. rg2)
 
-                                       putStrLn "have to update fix update_flags"
+                                           putStrLn "have to update fix update_flags"
 
-                            LDR  -> do let r0 = (instr `shiftR` 9) .&. 0x7
-                                       let r1 = (instr `shiftR` 6) .&. 0x7
-                                       let offset = sign_extend (instr .&. 0x3F) 6
-                                       -- mem_read
-                                       -- update_flags
-                                       pure ()
+                                LDR  -> do let r0 = (instr `shiftR` 9) .&. 0x7
+                                           let r1 = (instr `shiftR` 6) .&. 0x7
+                                           let offset = sign_extend (instr .&. 0x3F) 6
+                                           -- mem_read
+                                           -- update_flags
+                                           pure ()
 
-                            STRR -> do let r0 = (instr `shiftR` 9) .&. 0x7
-                                       let r1 = (instr `shiftR` 6) .&. 0x7
-                                       let offset = sign_extend (instr .&. 0x3F) 6
-                                       --mem_write
-                                       pure ()
+                                STRR -> do let r0 = (instr `shiftR` 9) .&. 0x7
+                                           let r1 = (instr `shiftR` 6) .&. 0x7
+                                           let offset = sign_extend (instr .&. 0x3F) 6
+                                           --mem_write
+                                           pure ()
 
-                            RTI  -> pure ()
+                                RTI  -> pure ()
 
-                            NOT  -> do let r0 = (instr `shiftR` 9) .&. 0x7
-                                       let r1 = (instr `shiftR` 6) .&. 0x7
-                                       rg1 <- readArray registers' r1
-                                       let rg1' = complement rg1   
-                                       writeArray registers' r0 rg1
-                                       putStrLn "fix update_flags"
+                                NOT  -> do let r0 = (instr `shiftR` 9) .&. 0x7
+                                           let r1 = (instr `shiftR` 6) .&. 0x7
+                                           rg1 <- readArray registers' r1
+                                           let rg1' = complement rg1   
+                                           writeArray registers' r0 rg1
+                                           putStrLn "fix update_flags"
 
-                            LDI  -> do let r0 = (instr `shiftR` 9) .&. 0x7
-                                       let pc_offset = sign_extend (instr .&. 0x1FF) 9
-                                       r_pc <- readArray registers' (cast RPC)
-                                       --writeArray registers' r0 (mem_read (mem_read (r_pc + pc_offset)))
-                                       putStrLn "have to fix mem_read"
-                                       putStrLn "have to fix update_flags"
+                                LDI  -> do let r0 = (instr `shiftR` 9) .&. 0x7
+                                           let pc_offset = sign_extend (instr .&. 0x1FF) 9
+                                           r_pc <- readArray registers' (cast RPC)
+                                           --writeArray registers' r0 (mem_read (mem_read (r_pc + pc_offset)))
+                                           putStrLn "have to fix mem_read"
+                                           putStrLn "have to fix update_flags"
 
-                            STRI  -> do let r0 = (instr `shiftR` 9) .&. 0x7
-                                        let pc_offset = sign_extend (instr .&. 0x1FF) 9
-                                        -- mem_write (mem_read
-                                        pure ()
+                                STRI  -> do let r0 = (instr `shiftR` 9) .&. 0x7
+                                            let pc_offset = sign_extend (instr .&. 0x1FF) 9
+                                            -- mem_write (mem_read
+                                            pure ()
 
-                            JMP  -> do let r1 = (instr `shiftR` 6) .&. 0x7
-                                       rg1 <- readArray registers' r1
-                                       writeArray registers' (cast RPC) rg1
+                                JMP  -> do let r1 = (instr `shiftR` 6) .&. 0x7
+                                           rg1 <- readArray registers' r1
+                                           writeArray registers' (cast RPC) rg1
 
-                            RES  -> pure ()
+                                RES  -> pure ()
 
-                            LEA  -> do let r0 = (instr `shiftR` 9) .&. 0x7
-                                       let pc_offset = sign_extend (instr .&. 0x1FF) 9
-                                       r_pc <- readArray registers' (cast RPC)
-                                       writeArray registers' r0 (pc_offset + r_pc)
-                                       -- update_flags
-                                       
-                            TRAP -> do case makeTrap (instr .&. 0xFF) of
-                                        Getc  -> do r <- fromIntegral . ord <$> getChar
-                                                    writeArray registers' (cast R0) r
+                                LEA  -> do let r0 = (instr `shiftR` 9) .&. 0x7
+                                           let pc_offset = sign_extend (instr .&. 0x1FF) 9
+                                           r_pc <- readArray registers' (cast RPC)
+                                           writeArray registers' r0 (pc_offset + r_pc)
+                                           -- update_flags
+                                           
+                                TRAP -> do case makeTrap (instr .&. 0xFF) of
+                                            Getc  -> do r <- fromIntegral . ord <$> getChar
+                                                        writeArray registers' (cast R0) r
 
-                                        Out   -> do putChar =<< 
-                                                     chr . fromIntegral <$>
-                                                      readArray registers' (cast R0)
+                                            Out   -> do putChar =<< 
+                                                         chr . fromIntegral <$>
+                                                          readArray registers' (cast R0)
 
-                                        Puts  -> do let r0 = (instr `shiftR` 9) .&. 9
-                                                    let loop c = do
-                                                        --mem_read
-                                                        unless (c == 0x0000) $ do   
-                                                            putChar (chr c)
-                                                            loop (c+1)
-                                                            hFlush stdout
-                                                    loop $ fromIntegral r0
+                                            Puts  -> do let r0 = (instr `shiftR` 9) .&. 9
+                                                        let loop c = do
+                                                            --mem_read
+                                                            unless (c == 0x0000) $ do   
+                                                                putChar (chr c)
+                                                                loop (c+1)
+                                                                hFlush stdout
+                                                        loop $ fromIntegral r0
 
-                                        In    -> undefined
-                                        PutsP -> undefined
-                                        Halt  -> putStrLn "HALT"
+                                            In    -> undefined
+                                            PutsP -> undefined
+                                            Halt  -> go registers'' memory' Halted
 
-                      -- update pc
-                      -- go updated_registers updated_memory
 
 read_image_file :: String -> IO (Memory) 
 read_image_file file = do (origin:bytes) <- process . B.unpack <$> B.readFile file
@@ -341,9 +342,5 @@ main = do hSetBuffering stdin NoBuffering   -- setup
           args <- getArgs                   -- load args
           heap <- load_args args
           regs' <- setup_registers build_registers
-          machine <- stToIO $ (newSTRef Running >>= readSTRef :: Machine)
-          unless (machine == Halted) $ do
-              (heap', instr) <- mem_read (regs'!(cast RPC)) heap
-              let op = instr `shiftR` 12
-              (go regs' heap')
+          go regs' heap Running
           putStrLn "Done!"

@@ -1,8 +1,10 @@
 module Ex where
 
+import Control.Monad (unless)
 import Control.Monad.ST
 import Control.Monad.State (liftIO)
 import Data.STRef
+import Data.IORef
 
 data Status = Halted
             | Running
@@ -16,10 +18,10 @@ mutation machine = do curr <- newSTRef Running :: ST RealWorld (STRef RealWorld 
                       readSTRef curr 
 
 
-computation = do curr <- stToIO $ (newSTRef Running >>= readSTRef :: Machine)
-                 x <- newSTRef (-1)
-                 y <- 
+computation mach = undefined
 
 main :: IO ()
-main = do computation 
-          print "Program Halted"
+main = do let machine = newIORef Running
+          --unless ((readSTRef machine) == Halted) $ do
+           -- computation machine
+          print "Still works"
