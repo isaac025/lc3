@@ -9,7 +9,9 @@ import Data.Bits (shiftR, shiftL, (.|.), (.&.), Bits(..))
 import Data.List (foldl')
 import qualified Data.ByteString as B
 import Control.Monad
+import Control.Monad.ST
 import Data.Array
+import Data.STRef
 import Data.Char (chr, ord)
 import Data.Array.IO
 import System.IO (hSetBuffering, BufferMode(..), hFlush, stdin, stdout)
@@ -81,10 +83,7 @@ type Registers = Array Word16 Word16
 
 type Memory = Array Word16 Word16
 
-data Machine = Machine { reg :: Registers
-                       , mem :: Memory
-                       , status :: Status
-                       }
+type Machine = ST RealWorld Status
 
 build_registers :: Registers
 build_registers = array (0,10) [(i,0) | i <- [0..10]]
@@ -317,7 +316,9 @@ go registers memory = do (memory', instr) <- mem_read (registers!(cast RPC)) mem
                                         In    -> undefined
                                         PutsP -> undefined
                                         Halt  -> putStrLn "HALT"
-                -- loop here: go updated_registers updated_memory, updated_pc
+
+                      -- update pc
+                      -- go updated_registers updated_memory
 
 read_image_file :: String -> IO (Memory) 
 read_image_file file = do (origin:bytes) <- process . B.unpack <$> B.readFile file
@@ -340,8 +341,8 @@ main = do hSetBuffering stdin NoBuffering   -- setup
           args <- getArgs                   -- load args
           heap <- load_args args
           regs' <- setup_registers build_registers
-          let exMachina = Machine regs' heap Running  
-          forever $ do 
+          machine <- stToIO $ (newSTRef Running >>= readSTRef :: Machine)
+          unless (machine == Halted) $ do
               (heap', instr) <- mem_read (regs'!(cast RPC)) heap
               let op = instr `shiftR` 12
               (go regs' heap')
