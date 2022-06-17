@@ -109,7 +109,7 @@ mem_write address val memory = do memory' <- make_memory_mutable memory
 mem_read :: Word16 -> Memory -> IO (Memory, Word16)
 mem_read address memory = do key <- check_key 
                              case address == mr_kbsr of
-                                True -> case key /= 0 of
+                                True -> case key > 0 of
 
                                     True ->  do mem' <- make_memory_mutable memory 
                                                 writeArray mem' mr_kbsr (1 `shiftL` 15)
@@ -167,7 +167,7 @@ update_flags registers r = do rg <- readArray registers r
                               case rg of
                                 z | z == 0              -> do writeArray registers r' fl_zro
                                                               freeze registers
-                                  | z `shiftR` 15 /= 0  -> do writeArray registers r' fl_neg
+                                  | z `shiftR` 15 > 0   -> do writeArray registers r' fl_neg
                                                               freeze registers
                                   | otherwise           -> do writeArray registers r' fl_pos
                                                               freeze registers
@@ -207,7 +207,7 @@ go registers memory Running = do (memory', instr) <- mem_read (registers!(cast R
                                     BR   -> do let pc_offset = sign_extend (instr .&. 0x1FF) 9
                                                let cond_flag = (instr `shiftR` 9) .&. 0x7
                                                r_pc <- readArray registers' (cast RPC)
-                                               when ((cond_flag .&. r_pc) /= 0) $ do
+                                               when ((cond_flag .&. r_pc) > 0) $ do
                                                     writeArray registers' (cast RPC) (r_pc + pc_offset)
                                                registers'' <- freeze registers'
                                                go registers'' memory' Running
@@ -217,20 +217,21 @@ go registers memory Running = do (memory', instr) <- mem_read (registers!(cast R
                                                let r1 = (instr `shiftR` 6) .&. 0x7
                                                let pc_offset = sign_extend (instr .&. 0x1FF) 9
                                                let offset = sign_extend (instr .&. 0x3F) 6
-                                               case imm_flag /= 0 of
+                                               case imm_flag > 0 of
                                                 True -> do let imm5 = sign_extend (instr .&. 0x1F) 5
                                                            rg0 <- readArray registers' r0
                                                            rg1 <- readArray registers' r1
                                                            writeArray registers' rg0 (rg1+imm5)
+                                                           registers'' <- update_flags registers' r0
+                                                           go registers'' memory' Running
 
                                                 False -> do let r2 = instr .&. 0x7
                                                             rg0 <- readArray registers' r0
                                                             rg1 <- readArray registers' r1
                                                             writeArray registers' r0 (rg1+r2)
+                                                            registers'' <- update_flags registers' r0
+                                                            go registers'' memory' Running
 
-                                               registers'' <- update_flags registers' r0
-                                               go registers'' memory' Running
-                                                                
                                     LD   -> do let r0 = (instr `shiftR` 9) .&. 0x7
                                                let pc_offset = sign_extend (instr .&. 0x1FF) 9
                                                (memory'', addr) <- mem_read (r0 + pc_offset) memory'
@@ -249,32 +250,34 @@ go registers memory Running = do (memory', instr) <- mem_read (registers!(cast R
                                     JSR  -> do let long_flag = (instr `shiftR` 11) .&. 1
                                                r_pc <- readArray registers' (cast RPC)
                                                writeArray registers' (cast R7) r_pc
-                                               case long_flag /= 0 of
+                                               case long_flag > 0 of
                                                 True  -> do let long_pc_offset = sign_extend (instr .&. 0x7FF) 11
                                                             writeArray registers' (cast RPC) (r_pc+long_pc_offset)
+                                                            registers'' <- freeze registers'
+                                                            go registers'' memory' Running
 
                                                 False -> do let r1 = (instr `shiftR` 6) .&. 0x7
                                                             r1' <- readArray registers' r1
                                                             writeArray registers' (cast RPC) r1' 
-
-                                               registers'' <- freeze registers'
-                                               go registers'' memory' Running
+                                                            registers'' <- freeze registers'
+                                                            go registers'' memory' Running
 
                                     AND  -> do let imm_flag = (instr `shiftR` 5) .&. 0x1
                                                let r0 = (instr `shiftR` 9) .&. 0x7
                                                let r1 = (instr `shiftR` 6) .&. 0x7
-                                               case (imm_flag /= 0) of
+                                               case (imm_flag > 0) of
                                                 True -> do let imm5 = sign_extend (instr .&. 0x1F) 5
                                                            rg1 <- readArray registers' r1
                                                            writeArray registers' r0 (rg1 .&. imm5)
+                                                           registers'' <- update_flags registers' r0
+                                                           go registers'' memory' Running 
 
                                                 False -> do let r2 = instr .&. 0x7
                                                             rg1 <- readArray registers' r1
                                                             rg2 <- readArray registers' r2
                                                             writeArray registers' r0 (rg1 .&. rg2)
-
-                                               registers'' <- update_flags registers' r0
-                                               go registers'' memory' Running 
+                                                            registers'' <- update_flags registers' r0
+                                                            go registers'' memory' Running 
 
                                     LDR  -> do let r0 = (instr `shiftR` 9) .&. 0x7
                                                let r1 = (instr `shiftR` 6) .&. 0x7
@@ -362,6 +365,8 @@ go registers memory Running = do (memory', instr) <- mem_read (registers!(cast R
 
                                                 In    -> do c <- fromIntegral . ord <$> getChar
                                                             writeArray registers' (cast R0) c
+                                                            registers'' <- freeze registers'
+                                                            go registers'' memory' Running
 
                                                 PutsP -> do rg0 <- readArray registers' (cast R0)
                                                             let loop x = do (memory'', address) <- mem_read x memory'
