@@ -101,6 +101,11 @@ check_key = do result <- B.hGetNonBlocking stdin 1
                       | otherwise -> do let [l] = B.unpack x
                                         pure $ fromIntegral l
 
+mem_write :: Word16 -> Word16 -> Memory -> IO Memory
+mem_write address val memory = do memory' <- make_memory_mutable memory
+                                  writeArray memory' address val
+                                  freeze memory'
+
 mem_read :: Word16 -> Memory -> IO (Memory, Word16)
 mem_read address memory = do key <- check_key 
                              case address == mr_kbsr of
@@ -203,7 +208,10 @@ go registers memory Running = do (memory', instr) <- mem_read (registers!(cast R
                                                let cond_flag = (instr `shiftR` 9) .&. 0x7
                                                r_pc <- readArray registers' (cast RPC)
                                                when ((cond_flag .&. r_pc) /= 0) $ do
-                                                writeArray registers' (cast RPC) (r_pc + pc_offset)
+                                                    writeArray registers' (cast RPC) (r_pc + pc_offset)
+                                               registers'' <- freeze registers'
+                                               go registers'' memory' Running
+                                            
 
                                     ADD  -> do let imm_flag = (instr `shiftR` 5) .&. 0x1
                                                let r0 = (instr `shiftR` 9) .&. 0x7
@@ -229,13 +237,15 @@ go registers memory Running = do (memory', instr) <- mem_read (registers!(cast R
                                                (memory'', addr) <- mem_read (r0 + pc_offset) memory'
                                                writeArray registers' r0 addr
                                                registers'' <- update_flags registers' r0
-                                               putStrLn "LDI happen!"
                                                go registers'' memory'' Running
 
                                     STR  -> do let r0 = (instr `shiftR` 9) .&. 0x7
                                                let pc_offset = sign_extend (instr .&. 0x1FF) 9
-                                               -- mem_write
-                                               pure ()
+                                               r_pc <- readArray registers' (cast RPC)
+                                               rg0 <- readArray registers' r0
+                                               memory'' <- mem_write (r_pc+pc_offset) rg0 memory'
+                                               registers'' <- freeze registers'
+                                               go registers'' memory'' Running
 
                                     JSR  -> do let long_flag = (instr `shiftR` 11) .&. 1
                                                r_pc <- readArray registers' (cast RPC)
@@ -247,6 +257,9 @@ go registers memory Running = do (memory', instr) <- mem_read (registers!(cast R
                                                 False -> do let r1 = (instr `shiftR` 6) .&. 0x7
                                                             r1' <- readArray registers' r1
                                                             writeArray registers' (cast RPC) r1' 
+
+                                               registers'' <- freeze registers'
+                                               go registers'' memory' Running
 
                                     AND  -> do let imm_flag = (instr `shiftR` 5) .&. 0x1
                                                let r0 = (instr `shiftR` 9) .&. 0x7
@@ -267,44 +280,60 @@ go registers memory Running = do (memory', instr) <- mem_read (registers!(cast R
                                     LDR  -> do let r0 = (instr `shiftR` 9) .&. 0x7
                                                let r1 = (instr `shiftR` 6) .&. 0x7
                                                let offset = sign_extend (instr .&. 0x3F) 6
-                                               -- mem_read
-                                               -- update_flags
-                                               pure ()
+                                               rg1 <- readArray registers' r1
+                                               (memory'', address) <- mem_read (rg1+offset) memory'
+                                               writeArray registers' r0 address
+                                               registers'' <- update_flags registers' r0 
+                                               go registers'' memory'' Running
 
                                     STRR -> do let r0 = (instr `shiftR` 9) .&. 0x7
                                                let r1 = (instr `shiftR` 6) .&. 0x7
                                                let offset = sign_extend (instr .&. 0x3F) 6
-                                               --mem_write
-                                               pure ()
+                                               rg0 <- readArray registers' r0
+                                               rg1 <- readArray registers' r1
+                                               memory'' <- mem_write (rg1+offset) rg0 memory'
+                                               registers'' <- freeze registers'
+                                               go registers'' memory'' Running
 
-                                    RTI  -> pure ()
+                                    RTI  -> do registers'' <- freeze registers'
+                                               go registers'' memory' Running
+
                                     NOT  -> do let r0 = (instr `shiftR` 9) .&. 0x7
                                                let r1 = (instr `shiftR` 6) .&. 0x7
                                                rg1 <- readArray registers' r1
                                                let rg1' = complement rg1   
                                                writeArray registers' r0 rg1
-                                               putStrLn "fix update_flags"
+                                               registers'' <- update_flags registers' r0
+                                               go registers'' memory' Running
 
                                     LDI  -> do let r0 = (instr `shiftR` 9) .&. 0x7
                                                let pc_offset = sign_extend (instr .&. 0x1FF) 9
                                                r_pc <- readArray registers' (cast RPC)
-                                               (memory'', r0') <- mem_read  (r_pc + pc_offset) memory'
-                                               (memory''', r0'') <- mem_read r0' memory'' 
-                                               writeArray registers' r0 r0''
+                                               (memory'', address1) <- mem_read  (r_pc + pc_offset) memory'
+                                               (memory''', address2) <- mem_read address1 memory'' 
+                                               writeArray registers' r0 address2
                                                registers'' <- update_flags registers' r0
                                                go registers'' memory''' Running
 
                                     STRI  -> do let r0 = (instr `shiftR` 9) .&. 0x7
                                                 let pc_offset = sign_extend (instr .&. 0x1FF) 9
-                                                -- mem_write (mem_read
-                                                pure ()
+                                                rg0 <- readArray registers' r0
+                                                r_pc <- readArray registers' (cast RPC)
+                                                (memory'', address) <- mem_read (r_pc+pc_offset) memory'
+                                                memory''' <- mem_write address rg0 memory''
+                                                registers'' <- freeze registers'
+                                                go registers'' memory''' Running
 
                                     JMP  -> do let r1 = (instr `shiftR` 6) .&. 0x7
                                                rg1 <- readArray registers' r1
                                                writeArray registers' (cast RPC) rg1
+                                               registers'' <- freeze registers'
+                                               go registers'' memory' Running
 
-                                    RES  -> pure ()
- 
+                                    RES  -> do registers'' <- freeze registers'
+                                               go registers'' memory' Running
+
+
                                     LEA  -> do let r0 = (instr `shiftR` 9) .&. 0x7
                                                let pc_offset = sign_extend (instr .&. 0x1FF) 9
                                                r_pc <- readArray registers' (cast RPC)
@@ -315,6 +344,8 @@ go registers memory Running = do (memory', instr) <- mem_read (registers!(cast R
                                     TRAP -> do case makeTrap (instr .&. 0xFF) of
                                                 Getc  -> do r <- fromIntegral . ord <$> getChar
                                                             writeArray registers' (cast R0) r
+                                                            registers'' <- update_flags registers' (cast R0)
+                                                            go registers'' memory' Running
 
                                                 Out   -> do putChar =<< 
                                                              chr . fromIntegral <$>
