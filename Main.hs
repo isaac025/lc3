@@ -11,6 +11,8 @@ import qualified Data.ByteString as B
 import Control.Monad
 import Control.Monad.ST
 import Data.Array
+import qualified Data.Array as A
+import Numeric (showHex, showIntAtBase)
 import Data.STRef
 import Data.Char (chr, ord)
 import Data.Array.IO
@@ -203,11 +205,17 @@ go _ _ Halted = pure ()
 go registers memory Running = do (memory', instr) <- mem_read (registers!(cast RPC)) memory
                                  registers' <- make_registers_mutable =<< update_pc registers
                                  let op = getOp instr
+                                 when False $ do
+                                      putStrLn mempty
+                                      putStrLn (showHexAndBinary instr)
+                                      mapM_ (\(n,x) -> putStrLn $ show (toEnum n :: R) ++ ": 0x" ++ showHex x "") (zip [0..10] (A.elems registers))
+
                                  case op of
                                     BR   -> do let pc_offset = sign_extend (instr .&. 0x1FF) 9
                                                let cond_flag = (instr `shiftR` 9) .&. 0x7
+                                               r_cond <- readArray registers' (cast RCOND)
                                                r_pc <- readArray registers' (cast RPC)
-                                               when ((cond_flag .&. r_pc) > 0) $ do
+                                               when ((cond_flag .&. r_cond) > 0) $ do
                                                     writeArray registers' (cast RPC) (r_pc + pc_offset)
                                                registers'' <- freeze registers'
                                                go registers'' memory' Running
@@ -222,15 +230,15 @@ go registers memory Running = do (memory', instr) <- mem_read (registers!(cast R
                                                            rg0 <- readArray registers' r0
                                                            rg1 <- readArray registers' r1
                                                            writeArray registers' rg0 (rg1+imm5)
-                                                           registers'' <- update_flags registers' r0
-                                                           go registers'' memory' Running
 
                                                 False -> do let r2 = instr .&. 0x7
                                                             rg0 <- readArray registers' r0
                                                             rg1 <- readArray registers' r1
                                                             writeArray registers' r0 (rg1+r2)
-                                                            registers'' <- update_flags registers' r0
-                                                            go registers'' memory' Running
+
+                                               registers'' <- update_flags registers' r0
+                                               go registers'' memory' Running
+
 
                                     LD   -> do let r0 = (instr `shiftR` 9) .&. 0x7
                                                let pc_offset = sign_extend (instr .&. 0x1FF) 9
@@ -253,14 +261,13 @@ go registers memory Running = do (memory', instr) <- mem_read (registers!(cast R
                                                case long_flag > 0 of
                                                 True  -> do let long_pc_offset = sign_extend (instr .&. 0x7FF) 11
                                                             writeArray registers' (cast RPC) (r_pc+long_pc_offset)
-                                                            registers'' <- freeze registers'
-                                                            go registers'' memory' Running
 
                                                 False -> do let r1 = (instr `shiftR` 6) .&. 0x7
                                                             r1' <- readArray registers' r1
                                                             writeArray registers' (cast RPC) r1' 
-                                                            registers'' <- freeze registers'
-                                                            go registers'' memory' Running
+
+                                               registers'' <- freeze registers'
+                                               go registers'' memory' Running
 
                                     AND  -> do let imm_flag = (instr `shiftR` 5) .&. 0x1
                                                let r0 = (instr `shiftR` 9) .&. 0x7
@@ -269,15 +276,14 @@ go registers memory Running = do (memory', instr) <- mem_read (registers!(cast R
                                                 True -> do let imm5 = sign_extend (instr .&. 0x1F) 5
                                                            rg1 <- readArray registers' r1
                                                            writeArray registers' r0 (rg1 .&. imm5)
-                                                           registers'' <- update_flags registers' r0
-                                                           go registers'' memory' Running 
 
                                                 False -> do let r2 = instr .&. 0x7
                                                             rg1 <- readArray registers' r1
                                                             rg2 <- readArray registers' r2
                                                             writeArray registers' r0 (rg1 .&. rg2)
-                                                            registers'' <- update_flags registers' r0
-                                                            go registers'' memory' Running 
+
+                                               registers'' <- update_flags registers' r0
+                                               go registers'' memory' Running 
 
                                     LDR  -> do let r0 = (instr `shiftR` 9) .&. 0x7
                                                let r1 = (instr `shiftR` 6) .&. 0x7
@@ -381,6 +387,16 @@ go registers memory Running = do (memory', instr) <- mem_read (registers!(cast R
 
                                                 Halt  -> go registers memory' Halted
 
+
+showBinary :: Word16 -> String
+showBinary x = "0b" ++ showIntAtBase 2 (head . show) x ""
+
+showHexAndBinary :: Word16 -> String
+showHexAndBinary instr =
+  show (getOp instr) ++ " -> 0x" ++ showHex instr "" ++ " " ++ showBinary instr
+
+debug :: Bool
+debug = True
 
 read_image_file :: String -> IO (Memory) 
 read_image_file file = do (origin:bytes) <- process . B.unpack <$> B.readFile file
