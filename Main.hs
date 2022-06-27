@@ -40,7 +40,6 @@ data Trap = Getc
           | Halt
           deriving (Show, Eq, Bounded, Enum)
 
-
 data OpCode = BR    -- branch
             | ADD   -- add 
             | LD    -- load
@@ -200,19 +199,20 @@ update_pc registers = do registers' <- make_registers_mutable registers
                          writeArray registers' (cast RPC) (rpc+1) 
                          freeze registers'
 
+dumpRegisters :: Word16 -> Array Word16 Word16 -> IO () 
+dumpRegisters instr registers = do putStrLn mempty
+                                   putStrLn (showHexAndBinary instr)
+                                   mapM_ (\(n,x) -> putStrLn $ show (toEnum n :: R) ++ ": 0x" ++ showHex x "") (zip [0..10] (A.elems registers))
+
 go :: Registers -> Memory -> Status -> IO ()
 go _ _ Halted = pure ()
 go registers memory Running = do (memory', instr) <- mem_read (registers!(cast RPC)) memory
                                  registers' <- make_registers_mutable =<< update_pc registers
                                  let op = getOp instr
-                                 when False $ do
-                                      putStrLn mempty
-                                      putStrLn (showHexAndBinary instr)
-                                      mapM_ (\(n,x) -> putStrLn $ show (toEnum n :: R) ++ ": 0x" ++ showHex x "") (zip [0..10] (A.elems registers))
-
+                                 when debug (dumpRegisters instr registers) 
                                  case op of
                                     BR   -> do let pc_offset = sign_extend (instr .&. 0x1FF) 9
-                                               let cond_flag = (instr `shiftR` 9) .&. 0x7
+                                                   cond_flag = (instr `shiftR` 9) .&. 0x7
                                                r_cond <- readArray registers' (cast RCOND)
                                                r_pc <- readArray registers' (cast RPC)
                                                when ((cond_flag .&. r_cond) > 0) $ do
@@ -221,11 +221,11 @@ go registers memory Running = do (memory', instr) <- mem_read (registers!(cast R
                                                go registers'' memory' Running
                                             
                                     ADD  -> do let imm_flag = (instr `shiftR` 5) .&. 0x1
-                                               let r0 = (instr `shiftR` 9) .&. 0x7
-                                               let r1 = (instr `shiftR` 6) .&. 0x7
-                                               let pc_offset = sign_extend (instr .&. 0x1FF) 9
-                                               let offset = sign_extend (instr .&. 0x3F) 6
-                                               case imm_flag > 0 of
+                                                   r0 = (instr `shiftR` 9) .&. 0x7
+                                                   r1 = (instr `shiftR` 6) .&. 0x7
+                                                   pc_offset = sign_extend (instr .&. 0x1FF) 9
+                                                   offset = sign_extend (instr .&. 0x3F) 6
+                                               case imm_flag /= 0 of
                                                 True -> do let imm5 = sign_extend (instr .&. 0x1F) 5
                                                            rg0 <- readArray registers' r0
                                                            rg1 <- readArray registers' r1
@@ -386,7 +386,6 @@ go registers memory Running = do (memory', instr) <- mem_read (registers!(cast R
                                                             loop rg0
 
                                                 Halt  -> go registers memory' Halted
-
 
 showBinary :: Word16 -> String
 showBinary x = "0b" ++ showIntAtBase 2 (head . show) x ""
